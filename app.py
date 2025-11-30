@@ -97,14 +97,20 @@ st.markdown("""
 @st.cache_data(ttl=60)
 def get_stock_data(ticker, interval, period, start=None, end=None):
     try:
+        # 1. Primary Attempt
         if interval == "1d" and start and end:
             data = yf.download(ticker, start=start, end=end, interval=interval, progress=False)
         else:
             data = yf.download(ticker, period=period, interval=interval, progress=False)
+        
+        # 2. Fallback Logic (Crucial for Weekends/Market Holidays)
+        # If '1d' period returns empty (because market is closed today), fetch last 5 days
+        if data.empty and period == "1d":
+            data = yf.download(ticker, period="5d", interval=interval, progress=False)
+        
         return data
     except Exception as e:
-        st.error(f"Data Error: {e}")
-        return None
+        return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def get_stock_info(ticker):
@@ -112,7 +118,7 @@ def get_stock_info(ticker):
         stock = yf.Ticker(ticker)
         return stock.info, stock.news
     except Exception:
-        return None, None
+        return {}, []
 
 @st.cache_data(ttl=300)
 def get_exchange_rate(pair="KRW=X"):
@@ -130,41 +136,22 @@ def calculate_currency_conversion(amount, from_curr, to_curr):
     if from_curr == to_curr:
         return amount, 1.0
     
-    # Common pairs list to try
-    pairs_to_try = [
-        f"{from_curr}{to_curr}=X", # Direct e.g. EURUSD=X
-        f"{to_curr}{from_curr}=X", # Inverse e.g. USDEUR=X (if it existed)
-        f"USD{from_curr}=X",       # Bridge via USD (USD/From)
-        f"USD{to_curr}=X",         # Bridge via USD (USD/To)
-        f"{from_curr}USD=X",       # Bridge via USD (From/USD)
-        f"{to_curr}USD=X"          # Bridge via USD (To/USD)
-    ]
-    
-    # 1. Try Direct
     try:
+        # Try direct pair first
         ticker = f"{from_curr}{to_curr}=X"
         data = yf.Ticker(ticker).history(period="1d")
         if not data.empty:
             rate = data['Close'].iloc[-1]
             return amount * rate, rate
-    except: pass
-
-    # 2. Try Inverse (e.g. converting KRW to USD, lookup USDKRW)
-    try:
+            
+        # Try inverse
         ticker = f"{to_curr}{from_curr}=X"
         data = yf.Ticker(ticker).history(period="1d")
         if not data.empty:
             rate = 1.0 / data['Close'].iloc[-1]
             return amount * rate, rate
-    except: pass
-
-    # 3. Fallback: Bridge via USD (approximate)
-    # This is complex to automate perfectly without a full map, 
-    # but let's assume 'USD' is the anchor.
-    # If converting A -> B, and we have USD/A and USD/B
-    # Rate = (USD/B) / (USD/A) ?? No.
-    # Let's simplify: Use the sidebar logic to just show N/A if direct fails for now
-    # to maintain speed, or rely on Yahoo's broad coverage.
+    except:
+        pass
     
     return None, None
 
